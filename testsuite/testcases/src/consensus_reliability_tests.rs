@@ -136,56 +136,86 @@ impl NetworkLoadTest for ChangingWorkingQuorumTest {
                     (vec![], false)
                 }
             }))),
-            Box::new(move |cycle, _, _, _, cur, previous| {
+            Box::new(move |cycle, _, _, _, cycle_end, cycle_start| {
                 let down_indices = down_indices_f(cycle);
-                let prev_down_indices = if cycle > 0 { down_indices_f(cycle - 1) } else { HashSet::new() };
-                fn split(all: Vec<NodeState>, down_indices: &HashSet<usize>) -> (Vec<(usize, NodeState)>, Vec<NodeState>) {
-                    let (down, active): (Vec<_>, Vec<_>) = all.into_iter().enumerate().partition(|(idx, _state)| down_indices.contains(idx));
-                    (down, active.into_iter().map(|(_idx, state)| state).collect())
+                let recently_down_indices = if cycle > 0 { down_indices_f(cycle - 1) } else { HashSet::new() };
+                fn split(all: Vec<NodeState>, down_indices: &HashSet<usize>, recently_down_indices: &HashSet<usize>) -> (Vec<(usize, NodeState)>, Vec<(usize, NodeState)>, Vec<NodeState>) {
+                    let (down, not_down): (Vec<_>, Vec<_>) = all.into_iter().enumerate().partition(|(idx, _state)| down_indices.contains(idx));
+                    let (recently_down, active)  = not_down.into_iter().partition(|(idx, _state)| recently_down_indices.contains(idx));
+                    (down, recently_down, active.into_iter().map(|(_idx, state)| state).collect())
                 }
 
-                let (cur_down, cur_active) = split(cur, &down_indices);
-                let (prev_down, prev_active) = split(previous, &down_indices);
+                let (cycle_end_down, cycle_end_recently_down, cycle_end_active) = split(cycle_end, &down_indices, &recently_down_indices);
+                let (cycle_start_down, cycle_start_recently_down, cycle_start_active) = split(cycle_start, &down_indices, &recently_down_indices);
 
-                // Make sure that every active node is making progress, so we compare min(cur) vs max(previous)
-                let (cur_min_epoch, cur_min_round) = cur_active.iter().map(|s| (s.epoch, s.round)).min().unwrap();
-                let (prev_max_epoch, prev_max_round) = prev_active.iter().map(|s| (s.epoch, s.round)).max().unwrap();
+                // Make sure that every active node is making progress, so we compare min(cycle_end) vs max(cycle_start)
+                let (cycle_end_min_epoch, cycle_end_min_round) = cycle_end_active.iter().map(|s| (s.epoch, s.round)).min().unwrap();
+                let (cycle_start_max_epoch, cycle_start_max_round) = cycle_start_active.iter().map(|s| (s.epoch, s.round)).max().unwrap();
 
-                let epochs_progress = cur_min_epoch as i64 - prev_max_epoch as i64;
-                let round_progress = cur_min_round as i64 - prev_max_round as i64;
+                let epochs_progress = cycle_end_min_epoch as i64 - cycle_start_max_epoch as i64;
+                let round_progress = cycle_end_min_round as i64 - cycle_start_max_round as i64;
 
-                let transaction_progress = cur_active.iter().map(|s| s.version).min().unwrap() as i64
-                    - prev_active.iter().map(|s| s.version).max().unwrap() as i64;
+                let transaction_progress = cycle_end_active.iter().map(|s| s.version).min().unwrap() as i64
+                    - cycle_start_active.iter().map(|s| s.version).max().unwrap() as i64;
 
                 if transaction_progress < (min_tps * check_period_s) as i64 {
                     bail!(
-                        "no progress with active consensus, only {} transactions, expected >= {} ({} TPS). Down indices {:?}, Prev active: {:?}. Cur active: {:?}",
+                        "no progress with active consensus, only {} transactions, expected >= {} ({} TPS). Down indices {:?}, cycle start active: {:?}. cycle end active: {:?}",
                         transaction_progress,
-                        (min_tps * check_period_s),
+                        min_tps * check_period_s,
                         min_tps,
                         down_indices,
-                        prev_active,
-                        cur_active,
+                        cycle_start_active,
+                        cycle_end_active,
                     );
                 }
                 if epochs_progress < 0 || (epochs_progress == 0 && round_progress < (check_period_s / 2) as i64) {
-                    bail!("no progress with active consensus, only {} epochs and {} rounds, expectd >= {}",
-                    epochs_progress,
-                    round_progress,
-                        (check_period_s / 2),
+                    bail!(
+                        "no progress with active consensus, only {} epochs and {} rounds, expectd >= {}",
+                        epochs_progress,
+                        round_progress,
+                        check_period_s / 2,
                     );
                 }
 
+                // Make sure that prev_down nodes are making progress
+                for ((node_idx, cycle_end_state), (node_idx_p, cycle_start_state)) in cycle_end_recently_down.iter().zip(cycle_start_recently_down.iter()) {
+                    assert_eq!(node_idx, node_idx_p, "{:?} {:?}", cycle_end_recently_down, cycle_start_recently_down);
+                    if (cycle_end_state.version as i64 - cycle_start_state.version as i64) < (min_tps * check_period_s) as i64 {
+                        bail!(
+                            "no progress on recently down node ({}), only {} transactions, expected >= {} ({} TPS)",
+                            node_idx,
+                            transaction_progress,
+                            min_tps * check_period_s,
+                            min_tps,
+                        );
+                    }
+                }
+                for ((node_idx, cycle_end_state), (node_idx_p, cycle_start_state)) in cycle_end_recently_down.iter().zip(cycle_start_recently_down.iter()) {
+                    assert_eq!(node_idx, node_idx_p, "{:?} {:?}", cycle_end_recently_down, cycle_start_recently_down);
+                    let epochs_progress = cycle_end_state.epoch as i64 - cycle_start_state.epoch as i64;
+                    let round_progress = cycle_end_state.epoch as i64 - cycle_start_state.epoch as i64;
+
+                    if epochs_progress < 0 || (epochs_progress == 0 && round_progress < (check_period_s / 2) as i64) {
+                        bail!(
+                            "no progress with active consensus, only {} epochs and {} rounds, expectd >= {}",
+                            epochs_progress,
+                            round_progress,
+                            check_period_s / 2,
+                        );
+                    }
+                }
+
                 // Make sure down nodes don't make progress:
-                for ((node_idx, cur_state), (node_idx_p, prev_state)) in cur_down.iter().zip(prev_down.iter()) {
-                    assert_eq!(node_idx, node_idx_p, "{:?} {:?}", cur_down, prev_down);
-                    if cur_state.round > prev_state.round + 3 {
+                for ((node_idx, cycle_end_state), (node_idx_p, cycle_start_state)) in cycle_end_down.iter().zip(cycle_start_down.iter()) {
+                    assert_eq!(node_idx, node_idx_p, "{:?} {:?}", cycle_end_down, cycle_start_down);
+                    if cycle_end_state.round > cycle_start_state.round + 3 {
                         // if we just failed the node, some progress can happen due to pipeline in consensus,
                         // or buffer of received messages in state sync
-                        if prev_down_indices.contains(node_idx) {
-                            bail!("progress on down node {} from ({}, {}) to ({}, {})", node_idx, prev_state.epoch, prev_state.round, cur_state.epoch, cur_state.round);
+                        if recently_down_indices.contains(node_idx) {
+                            bail!("progress on down node {} from ({}, {}) to ({}, {})", node_idx, cycle_start_state.epoch, cycle_start_state.round, cycle_end_state.epoch, cycle_end_state.round);
                         } else {
-                            warn!("progress on down node {} immediatelly after turning off from ({}, {}) to ({}, {})", node_idx, prev_state.epoch, prev_state.round, cur_state.epoch, cur_state.round)
+                            warn!("progress on down node {} immediatelly after turning off from ({}, {}) to ({}, {})", node_idx, cycle_start_state.epoch, cycle_start_state.round, cycle_end_state.epoch, cycle_end_state.round)
                         }
                     }
                 }

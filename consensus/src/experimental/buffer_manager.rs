@@ -271,6 +271,19 @@ impl BufferManager {
             }
             if item.block_id() == target_block_id {
                 let aggregated_item = item.unwrap_aggregated();
+                // if we're the proposer for the block, we're responsible to broadcast the commit decision.
+                if aggregated_item
+                    .executed_blocks
+                    .last()
+                    .unwrap()
+                    .block()
+                    .author()
+                    == Some(self.author)
+                {
+                    self.commit_msg_tx
+                        .broadcast_commit_proof(aggregated_item.commit_proof.clone())
+                        .await;
+                }
                 if aggregated_item.commit_proof.ledger_info().ends_epoch() {
                     self.commit_msg_tx
                         .send_epoch_change(EpochChangeProof::new(
@@ -408,11 +421,23 @@ impl BufferManager {
             if item.is_executed() {
                 // we have found the buffer item
                 let signed_item = item.advance_to_signed(self.author, signature);
+                let maybe_proposer = signed_item
+                    .unwrap_signed_ref()
+                    .executed_blocks
+                    .last()
+                    .unwrap()
+                    .block()
+                    .author();
                 let commit_vote = signed_item.unwrap_signed_ref().commit_vote.clone();
 
                 self.buffer.set(&current_cursor, signed_item);
-
-                self.commit_msg_tx.broadcast_commit_vote(commit_vote).await;
+                if let Some(proposer) = maybe_proposer {
+                    self.commit_msg_tx
+                        .send_commit_vote(commit_vote, proposer)
+                        .await;
+                } else {
+                    self.commit_msg_tx.broadcast_commit_vote(commit_vote).await;
+                }
             } else {
                 self.buffer.set(&current_cursor, item);
             }

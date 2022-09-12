@@ -49,7 +49,8 @@ module aptos_framework::gas_schedule {
 
     public fun set_storage_gas_config(aptos_framework: &signer, config: StorageGasConfig) {
         storage_gas::set_config(aptos_framework, config);
-        // Need to trigger reconfiguration so the VM is guaranteed to load the new gas fee since the next transaction.
+        // Need to trigger reconfiguration so the VM is guaranteed to load the new gas fee starting from the next
+        // transaction.
         reconfiguration::reconfigure();
     }
 }

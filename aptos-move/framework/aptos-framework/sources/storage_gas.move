@@ -14,10 +14,7 @@ module aptos_framework::storage_gas {
     const EINVALID_GAS_RANGE: u64 = 2;
     const EZERO_TARGET_USAGE: u64 = 3;
     const ETARGET_USAGE_TOO_BIG: u64 = 4;
-    const EINVALID_CURVE_LENGTH: u64 = 5;
-    const EINVALID_CURVE_START_POINT: u64 = 6;
-    const EINVALID_CURVE_END_POINT: u64 = 7;
-    const EINVALID_MONOTONICALLY_NON_DECREASING_CURVE: u64 = 8;
+    const EINVALID_MONOTONICALLY_NON_DECREASING_CURVE: u64 = 5;
 
     const BASIS_POINT_DENOMINATION: u64 = 10000;
 
@@ -45,7 +42,6 @@ module aptos_framework::storage_gas {
         y: u64
     }
 
-    /// P(x) = min_price + (base ^ (utilization / target_usage) - 1) / (base - 1) * (max_price - min_price)
     struct UsageGasConfig has copy, drop, store {
         target_usage: u64,
         read_curve: GasCurve,
@@ -66,6 +62,7 @@ module aptos_framework::storage_gas {
         points: vector<Point>,
     }
 
+    /// P(x) = min_price + (base ^ (utilization / target_usage) - 1) / (base - 1) * (max_price - min_price)
     // Provide a default exponential curve with the base to be 32, which means:
     // When DB is at 50% target usage,the price increases roughly 15% of (max_price - min_price).
     // Detailed data points:
@@ -83,17 +80,17 @@ module aptos_framework::storage_gas {
     public fun base_32_exponential_curve(min_gas: u64, max_gas: u64): GasCurve {
         new_gas_curve(min_gas, max_gas,
             vector[
-                Point {x: 1000, y: 100},
-                Point {x: 2000, y: 300},
-                Point {x: 3000, y: 600},
-                Point {x: 4000, y: 1000},
-                Point {x: 5000, y: 1500},
-                Point {x: 6000, y: 2300},
-                Point {x: 7000, y: 3300},
-                Point {x: 8000, y: 4800},
-                Point {x: 9000, y: 7000},
-                Point {x: 9500, y: 8400},
-                Point {x: 9900, y: 9600},
+                new_point(1000, 100),
+                new_point(2000, 300),
+                new_point(3000, 600),
+                new_point(4000, 1000),
+                new_point(5000, 1500),
+                new_point(6000, 2300),
+                new_point(7000, 3300),
+                new_point(8000, 4800),
+                new_point(9000, 7000),
+                new_point(9500, 8400),
+                new_point(9900, 9600),
             ]
         )
     }
@@ -145,19 +142,19 @@ module aptos_framework::storage_gas {
             error::already_exists(ESTORAGE_GAS_CONFIG)
         );
         let item_curve = base_32_exponential_curve(100, 10000);
-        let byte_curve = base_32_exponential_curve(1, 1000);
+        let byte_curve = base_32_exponential_curve(1, 100);
 
         let item_config = UsageGasConfig {
             target_usage: 1000000000,  // 1 billion
-            read_curve: copy item_curve,
-            create_curve: copy item_curve,
-            write_curve: copy item_curve,
+            read_curve: item_curve,
+            create_curve: item_curve,
+            write_curve: item_curve,
         };
         let byte_config = UsageGasConfig {
-            target_usage: 250000000000, // 250 GB
-            read_curve: copy byte_curve,
-            create_curve: copy byte_curve,
-            write_curve: copy byte_curve,
+            target_usage: 500000000000, // 500 GB
+            read_curve: byte_curve,
+            create_curve: byte_curve,
+            write_curve: byte_curve,
         };
         validate_usage_config(&item_config);
         validate_usage_config(&item_config);
@@ -171,12 +168,12 @@ module aptos_framework::storage_gas {
             error::already_exists(ESTORAGE_GAS)
         );
         move_to(aptos_framework, StorageGas {
-            per_item_read: 0,
-            per_item_create: 0,
-            per_item_write: 0,
-            per_byte_read: 0,
-            per_byte_create: 0,
-            per_byte_write: 0,
+            per_item_read: 100,
+            per_item_create: 100,
+            per_item_write: 100,
+            per_byte_read: 1,
+            per_byte_create: 1,
+            per_byte_write: 1,
         });
     }
 
@@ -192,9 +189,6 @@ module aptos_framework::storage_gas {
         assert!(curve.max_gas >= curve.min_gas, error::invalid_argument(EINVALID_GAS_RANGE));
         let points = &curve.points;
         let len = vector::length(points);
-        assert!(len >= 2, error::invalid_argument(EINVALID_CURVE_LENGTH));
-        assert!(vector::borrow(points, 0).x > 0, error::invalid_argument(EINVALID_CURVE_START_POINT));
-        assert!(vector::borrow(points, len - 1).x < BASIS_POINT_DENOMINATION, error::invalid_argument(EINVALID_CURVE_END_POINT));
         let i = 0;
         while (i <= len) {
             let cur = if (i == 0) { &Point {x: 0, y: 0} } else { vector::borrow(points, i - 1) };
@@ -209,29 +203,35 @@ module aptos_framework::storage_gas {
         let points = &curve.points;
         let num_points = vector::length(points);
         let current_usage_bps = capped_current_usage * BASIS_POINT_DENOMINATION / max_usage;
-        let (i, j) = (0, num_points - 1);
-        while (i < j) {
-            let mid = j - (j - i) / 2;
-            if (current_usage_bps < vector::borrow(points, mid).x) {
-                j = mid - 1;
-            } else {
-                i = mid;
-            };
-        };
+
         // Check the corner case that current_usage_bps drops before the first point.
-        let (left, right) = if (current_usage_bps < vector::borrow(points, i).x) {
-            (&Point {x: 0, y: 0}, vector::borrow(points, i))
+        let (left, right) = if (num_points == 0) {
+            (&Point {x: 0, y: 0}, &Point {x: BASIS_POINT_DENOMINATION, y: BASIS_POINT_DENOMINATION})
         } else {
-            // Check the corner case that current_usage_bps drops after the last point.
-            (
-                vector::borrow(points, i),
-                if (i == num_points - 1) {
-                    &Point {x: BASIS_POINT_DENOMINATION, y: BASIS_POINT_DENOMINATION}
+            let (i, j) = (0, num_points - 1);
+            while (i < j) {
+                let mid = j - (j - i) / 2;
+                if (current_usage_bps < vector::borrow(points, mid).x) {
+                    j = mid - 1;
                 } else {
-                    vector::borrow(points, i + 1)
-                }
-            )
+                    i = mid;
+                };
+            };
+            if (current_usage_bps < vector::borrow(points, 0).x) {
+                (&Point {x: 0, y: 0}, vector::borrow(points, 0))
+            } else {
+                // Check the corner case that current_usage_bps drops after the last point.
+                (
+                    vector::borrow(points, i),
+                    if (i == num_points - 1) {
+                        &Point { x: BASIS_POINT_DENOMINATION, y: BASIS_POINT_DENOMINATION }
+                    } else {
+                        vector::borrow(points, i + 1)
+                    }
+                )
+            }
         };
+
         curve.min_gas + (curve.max_gas - curve.min_gas) * (left.y + (current_usage_bps - left.x) * (right.y - left.y) / (right.x - left.x)) / BASIS_POINT_DENOMINATION
     }
 
@@ -281,32 +281,38 @@ module aptos_framework::storage_gas {
         assert!(gas_parameter.per_byte_write == 1, 0);
     }
 
+    #[test]
     fun test_curve() {
         let constant_curve = new_gas_curve(5, 5, vector[]);
         let linear_curve = new_gas_curve(1, 1000, vector[]);
         let standard_curve = base_32_exponential_curve(1, 1000);
-        let i = 7;
-        let old_standard_curve_gas = 1;
-        while (i <= BASIS_POINT_DENOMINATION + 10) {
-            assert!(calculate_gas(BASIS_POINT_DENOMINATION, i, &constant_curve) == 5, 0);
-            assert!(calculate_gas(BASIS_POINT_DENOMINATION, i, &linear_curve) == 5, if (i < BASIS_POINT_DENOMINATION) {1 + 999 * i / BASIS_POINT_DENOMINATION} else {1000});
-            let new_standard_curve_gas = calculate_gas(BASIS_POINT_DENOMINATION, i, &standard_curve);
-            assert!(new_standard_curve_gas >= old_standard_curve_gas, 0);
-            old_standard_curve_gas = new_standard_curve_gas;
-            i = i + 7;
-        };
-        assert!(old_standard_curve_gas == 1000, 0);
+        let target = BASIS_POINT_DENOMINATION / 2;
+        while (target < 2 * BASIS_POINT_DENOMINATION) {
+            let i = 0;
+            let old_standard_curve_gas = 1;
+            while (i <= target + 7) {
+                assert!(calculate_gas(target, i, &constant_curve) == 5, 0);
+                assert!(calculate_gas(target, i, &linear_curve) == if (i < target) {1 + 999 * (i * BASIS_POINT_DENOMINATION / target) / BASIS_POINT_DENOMINATION} else {1000}, 0);
+                let new_standard_curve_gas = calculate_gas(target, i, &standard_curve);
+                assert!(new_standard_curve_gas >= old_standard_curve_gas, 0);
+                old_standard_curve_gas = new_standard_curve_gas;
+                i = i + 3;
+            };
+            assert!(old_standard_curve_gas == 1000, 0);
+            target = target + BASIS_POINT_DENOMINATION;
+        }
     }
 
     #[test(framework = @aptos_framework)]
     fun test_set_storage_gas_config(framework: signer) acquires StorageGas, StorageGasConfig {
         state_storage::initialize(&framework);
         initialize(&framework);
-        let curve = new_gas_curve(1000, 2000,
+        let item_curve = new_gas_curve(1000, 2000,
             vector[new_point(3000, 0), new_point(5000, 5000), new_point(8000, 5000)]
         );
-        let item_usage_config = new_usage_gas_config(100, copy curve, copy curve, copy curve);
-        let byte_usage_config = new_usage_gas_config(2000, copy curve, copy curve, copy curve);
+        let byte_curve = new_gas_curve(0, 1000, vector::singleton<Point>(new_point(5000, 3000)));
+        let item_usage_config = new_usage_gas_config(100, copy item_curve, copy item_curve, copy item_curve);
+        let byte_usage_config = new_usage_gas_config(2000, copy byte_curve, copy byte_curve, copy byte_curve);
         let storage_gas_config = new_storage_gas_config(item_usage_config, byte_usage_config);
         set_config(&framework, storage_gas_config);
         {
@@ -314,28 +320,28 @@ module aptos_framework::storage_gas {
             on_reconfig();
             let gas_parameter = borrow_global<StorageGas>(@aptos_framework);
             assert!(gas_parameter.per_item_read == 1000, 0);
-            assert!(gas_parameter.per_byte_read == 1000, 0);
+            assert!(gas_parameter.per_byte_read == 30, 0);
         };
         {
             state_storage::set_for_test(0, 40, 800);
             on_reconfig();
             let gas_parameter = borrow_global<StorageGas>(@aptos_framework);
             assert!(gas_parameter.per_item_create == 1250, 0);
-            assert!(gas_parameter.per_byte_create == 1250, 0);
+            assert!(gas_parameter.per_byte_create == 240, 0);
         };
         {
             state_storage::set_for_test(0, 60, 1200);
             on_reconfig();
             let gas_parameter = borrow_global<StorageGas>(@aptos_framework);
             assert!(gas_parameter.per_item_write == 1500, 0);
-            assert!(gas_parameter.per_byte_write == 1500, 0);
+            assert!(gas_parameter.per_byte_write == 440, 0);
         };
         {
             state_storage::set_for_test(0, 90, 1800);
             on_reconfig();
             let gas_parameter = borrow_global<StorageGas>(@aptos_framework);
             assert!(gas_parameter.per_item_create == 1750, 0);
-            assert!(gas_parameter.per_byte_create == 1750, 0);
+            assert!(gas_parameter.per_byte_create == 860, 0);
         };
         {
             // usage overflow case
@@ -343,7 +349,7 @@ module aptos_framework::storage_gas {
             on_reconfig();
             let gas_parameter = borrow_global<StorageGas>(@aptos_framework);
             assert!(gas_parameter.per_item_read == 2000, 0);
-            assert!(gas_parameter.per_byte_read == 2000, 0);
+            assert!(gas_parameter.per_byte_read == 1000, 0);
         };
     }
 }

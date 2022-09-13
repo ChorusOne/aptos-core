@@ -1,6 +1,8 @@
 // Copyright (c) Aptos
 // SPDX-License-Identifier: Apache-2.0
 
+use std::fmt::{Display, Formatter};
+
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub enum SwarmChaos {
     Delay(SwarmNetworkDelay),
@@ -10,12 +12,24 @@ pub enum SwarmChaos {
 }
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
-pub enum NodeChaos {
-    NodeNetworkDelayChaos(NodeNetworkDelay),
+pub struct SwarmNetworkDelay {
+    pub group_network_delays: Vec<GroupNetworkDelay>,
+    pub num_nodes: u64,
+}
+
+impl Display for SwarmNetworkDelay {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Delay {} nodes {:?}",
+            self.num_nodes, self.group_network_delays
+        )
+    }
 }
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
-pub struct SwarmNetworkDelay {
+pub struct GroupNetworkDelay {
+    pub num_nodes: u64,
     pub latency_ms: u64,
     pub jitter_ms: u64,
     pub correlation_percentage: u64,
@@ -26,11 +40,27 @@ pub struct SwarmNetworkPartition {
     pub partition_percentage: u64,
 }
 
+impl Display for SwarmNetworkPartition {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "Partition {} nodes", self.partition_percentage)
+    }
+}
+
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub struct SwarmNetworkBandwidth {
     pub rate: u64,
     pub limit: u64,
     pub buffer: u64,
+}
+
+impl Display for SwarmNetworkBandwidth {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Limit bandwidth on all nodes: rate {}, limit {}, buffer {}",
+            self.rate, self.limit, self.buffer
+        )
+    }
 }
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone)]
@@ -39,7 +69,12 @@ pub struct SwarmNetworkLoss {
     pub correlation_percentage: u64,
 }
 
-#[derive(Eq, Hash, PartialEq, Debug, Clone)]
-pub struct NodeNetworkDelay {
-    pub latency_ms: u64,
+impl Display for SwarmNetworkLoss {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Loss on all nodes: loss {}, correlation {},",
+            self.loss_percentage, self.correlation_percentage,
+        )
+    }
 }

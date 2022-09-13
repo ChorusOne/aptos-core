@@ -3,6 +3,7 @@
 
 use std::process::Command;
 
+use aptos_logger::info;
 use tempfile::TempDir;
 
 use crate::{
@@ -48,13 +49,29 @@ fn create_network_delay_template(
     kube_namespace: &str,
     swarm_network_delay: &SwarmNetworkDelay,
 ) -> String {
-    format!(
-        include_str!(DELAY_NETWORK_CHAOS_TEMPLATE!()),
-        namespace = kube_namespace,
-        latency_ms = swarm_network_delay.latency_ms,
-        jitter_ms = swarm_network_delay.jitter_ms,
-        correlation_percentage = swarm_network_delay.correlation_percentage,
-    )
+    let mut network_chaos_specs = vec![];
+    let mut node_counter = 0;
+
+    for group_network_delay in &swarm_network_delay.group_network_delays {
+        let start_pod_idx = node_counter;
+        let end_pod_idx = node_counter + group_network_delay.num_nodes;
+        let pod_names_string = (start_pod_idx..end_pod_idx)
+            .map(|i| format!("validator-{}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        network_chaos_specs.push(format!(
+            include_str!(DELAY_NETWORK_CHAOS_TEMPLATE!()),
+            namespace = kube_namespace,
+            latency_ms = group_network_delay.latency_ms,
+            jitter_ms = group_network_delay.jitter_ms,
+            correlation_percentage = group_network_delay.correlation_percentage,
+            pod_names = &pod_names_string,
+        ));
+
+        node_counter += group_network_delay.num_nodes;
+    }
+    network_chaos_specs.join("\n---\n")
 }
 
 fn create_network_partition_template(
@@ -106,6 +123,7 @@ fn create_chaos_template(kube_namespace: &str, chaos: &SwarmChaos) -> Result<Str
 /// Creates and applies the NetworkChaos CRD
 fn inject_chaos_template(kube_namespace: &str, chaos_template: String) -> Result<()> {
     let tmp_dir = TempDir::new().expect("Could not create temp dir");
+    info!("Creating chaos template:\n{}", chaos_template);
     let latency_network_chaos_file_path = dump_string_to_file(
         format!("{}-chaos.yaml", kube_namespace),
         chaos_template,

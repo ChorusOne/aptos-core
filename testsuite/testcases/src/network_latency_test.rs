@@ -2,14 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{LoadDestination, NetworkLoadTest};
-use forge::{NetworkContext, NetworkTest, Swarm, SwarmChaos, SwarmNetworkDelay, Test};
+use forge::{
+    GroupNetworkDelay, NetworkContext, NetworkTest, Swarm, SwarmChaos, SwarmExt, SwarmNetworkDelay,
+    Test,
+};
 
 pub struct NetworkLatencyTest;
-
-// Delay
-pub const LATENCY_MS: u64 = 200;
-pub const JITTER_MS: u64 = 100;
-pub const CORRELATION_PERCENTAGE: u64 = 10;
 
 impl Test for NetworkLatencyTest {
     fn name(&self) -> &'static str {
@@ -17,29 +15,43 @@ impl Test for NetworkLatencyTest {
     }
 }
 
+fn create_three_region_swarm_network_delay(swarm: &dyn Swarm) -> SwarmNetworkDelay {
+    let num_nodes = swarm.get_validator_clients_with_names().len() as u64;
+    let num_nodes_per_region = num_nodes / 3;
+
+    // baseline region has 0 latency
+    let region_b = GroupNetworkDelay {
+        num_nodes: num_nodes_per_region,
+        latency_ms: 100,
+        jitter_ms: 100,
+        correlation_percentage: 10,
+    };
+    let region_c = GroupNetworkDelay {
+        num_nodes: num_nodes_per_region,
+        latency_ms: 200,
+        jitter_ms: 100,
+        correlation_percentage: 10,
+    };
+    SwarmNetworkDelay {
+        group_network_delays: vec![region_b, region_c],
+        num_nodes,
+    }
+}
+
 impl NetworkLoadTest for NetworkLatencyTest {
     fn setup(&self, ctx: &mut NetworkContext) -> anyhow::Result<LoadDestination> {
-        ctx.swarm()
-            .inject_chaos(SwarmChaos::Delay(SwarmNetworkDelay {
-                latency_ms: LATENCY_MS,
-                jitter_ms: JITTER_MS,
-                correlation_percentage: CORRELATION_PERCENTAGE,
-            }))?;
-        let msg = format!(
-            "Injected {}ms +- {}ms with {}% correlation latency to namespace",
-            LATENCY_MS, JITTER_MS, CORRELATION_PERCENTAGE
-        );
+        let delay = create_three_region_swarm_network_delay(ctx.swarm());
+        let chaos = SwarmChaos::Delay(delay.clone());
+        ctx.swarm().inject_chaos(chaos)?;
+        let msg = format!("Injected {}", delay);
         println!("{}", msg);
         ctx.report.report_text(msg);
         Ok(LoadDestination::AllNodes)
     }
 
     fn finish(&self, swarm: &mut dyn Swarm) -> anyhow::Result<()> {
-        swarm.remove_chaos(SwarmChaos::Delay(SwarmNetworkDelay {
-            latency_ms: LATENCY_MS,
-            jitter_ms: JITTER_MS,
-            correlation_percentage: CORRELATION_PERCENTAGE,
-        }))
+        let chaos = SwarmChaos::Delay(create_three_region_swarm_network_delay(swarm));
+        swarm.remove_chaos(chaos)
     }
 }
 

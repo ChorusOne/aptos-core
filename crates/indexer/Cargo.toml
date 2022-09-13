@@ -17,9 +17,18 @@ aptos-bitvec = { path = "../aptos-bitvec" }
 aptos-config = { path = "../../config" }
 async-trait = "0.1.53"
 bigdecimal = { version = "0.1.2", features = ["serde"] }
-chrono = { version = "0.4.19", default-features = false, features = ["clock", "serde"] }
+chrono = { version = "0.4.19", default-features = false, features = [
+  "clock",
+  "serde",
+] }
 clap = { version = "3.1.17", features = ["env", "suggestions"] }
-diesel = { version = "1.4.8", features = ["chrono", "postgres", "r2d2", "numeric", "serde_json"] }
+diesel = { version = "1.4.8", features = [
+  "chrono",
+  "postgres",
+  "r2d2",
+  "numeric",
+  "serde_json",
+] }
 diesel_migrations = { version = "1.4.0", features = ["postgres"] }
 field_count = "0.1.1"
 futures = "0.3.21"
@@ -36,8 +45,8 @@ aptos-logger = { path = "../aptos-logger" }
 aptos-mempool = { path = "../../mempool" }
 aptos-metrics-core = { path = "../aptos-metrics-core" }
 aptos-types = { path = "../../types" }
-aptos-vm =  { path = "../../aptos-move/aptos-vm" }
+aptos-vm = { path = "../../aptos-move/aptos-vm" }
 storage-interface = { path = "../../storage/storage-interface" }
 
 [dev-dependencies]
-aptos-api-test-context  = { path = "../../api/test-context" }
+aptos-api-test-context = { path = "../../api/test-context" }

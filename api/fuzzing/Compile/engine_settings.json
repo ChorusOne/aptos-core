@@ -1,0 +1,10 @@
+{
+  "per_resource_settings": {},
+  "max_combinations": 20,
+  "fuzzing_mode": "bfs-fast",
+  "exclude_requests": [
+    {
+      "endpoint": "/-/healthy"
+    }
+  ]
+}
